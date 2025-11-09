@@ -38,7 +38,7 @@ jobs:
       - name: Build EXE with PyInstaller
         shell: pwsh
         run: |
-          $Script = "send_hospital_reports_v7.py"   # 改成你的脚本名
+          $Script = "send_hospital_reports_v8.py"   # 改成你的脚本名
           $AppName = "SendHospitalReports"          # 输出 exe 名称
           # 如需图标，先把 app.ico 放到仓库，然后加上 --icon app.ico
           pyinstaller --noconfirm --onefile --windowed `
