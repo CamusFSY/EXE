@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "send_hospital_reports.py"
+      - "http://send_hospital_reports_v6.py"
       - "requirements.txt"
       - ".github/workflows/build.yml"
 
