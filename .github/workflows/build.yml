@@ -1,4 +1,4 @@
-name: Build EXE (Fast & Portable)
+name: Build Windows EXE (onedir fast launch)
 
 on:
   workflow_dispatch: {}
@@ -8,9 +8,6 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        mode: [onedir, onefile]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,26 +15,30 @@ jobs:
           python-version: "3.11"
           architecture: "x64"
           cache: "pip"
-      - name: Install deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller pywin32
-      - name: PyInstaller (${{ matrix.mode }})
+          pip install pyinstaller==6.6.0 pywin32==306
+
+      - name: Build (PyInstaller onedir)
         shell: pwsh
         run: |
-          $Script = "send_hospital_reports_v8.py"
-          $AppName = "SendHospitalReports-${{ matrix.mode }}"
-          $Common = "--windowed --name `"$AppName`" --hidden-import win32com --hidden-import win32com.client --hidden-import pythoncom --hidden-import pywintypes --collect-submodules win32com --collect-data win32com"
-          if ("${{ matrix.mode }}" -eq "onedir") {
-            pyinstaller --noconfirm --onedir  $Common $Script
-          } else {
-            pyinstaller --noconfirm --onefile $Common --noupx $Script
-          }
-      - name: Upload artifact
+          $Script  = "send_hospital_reports_v8.py"
+          $AppName = "SendHospitalReports-onedir"
+          pyinstaller --noconfirm --onedir --windowed `
+            --name $AppName `
+            --hidden-import win32com `
+            --hidden-import win32com.client `
+            --hidden-import pythoncom `
+            --hidden-import pywintypes `
+            --collect-submodules win32com `
+            --collect-data win32com `
+            $Script
+          Get-ChildItem dist -Recurse
+
+      - name: Upload artifact (folder)
         uses: actions/upload-artifact@v4
         with:
-          name: SendHospitalReports-${{ matrix.mode }}
-          path: |
-            dist/SendHospitalReports-${{ matrix.mode }}.exe
-            dist/SendHospitalReports-${{ matrix.mode }}/
-          if-no-files-found: warn
+          name: SendHospitalReports-onedir
+          path: dist/SendHospitalReports-onedir/
+          if-no-files-found: error
