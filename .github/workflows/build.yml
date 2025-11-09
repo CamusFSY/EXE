@@ -1,4 +1,4 @@
-name: Build Windows EXE (PyInstaller)
+name: Build EXE (Fast & Portable)
 
 on:
   workflow_dispatch: {}
@@ -8,58 +8,36 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-
+    strategy:
+      matrix:
+        mode: [onedir, onefile]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           architecture: "x64"
           cache: "pip"
-
-      - name: Install dependencies
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          if (Test-Path requirements.txt) {
-            pip install -r requirements.txt
-          } else {
-            pip install pyinstaller pywin32
-          }
-
-      # 可选：如果你想把一个示例 mail_config.csv 一并打进 exe 同目录，先准备一个文件
-      # - name: Prepare sample config (optional)
-      #   run: |
-      #     echo "Hospital,To,Cc,Bcc,SubjectTemplate,BodyTemplate" > mail_config.csv
-      #     echo "示例医院A,example@hospital.com,,,【{hospital}】报告（{date_range_cn}）,[indent]尊敬的{hospital}同事：" >> mail_config.csv
-
-      - name: Build EXE with PyInstaller
+          pip install pyinstaller pywin32
+      - name: PyInstaller (${{ matrix.mode }})
         shell: pwsh
         run: |
-          $Script = "send_hospital_reports_v6.py"   # 改成你的脚本名
-          $AppName = "SendHospitalReports"          # 输出 exe 名称
-          # 如需图标，先把 app.ico 放到仓库，然后加上 --icon app.ico
-          pyinstaller --noconfirm --onefile --windowed `
-            --name "$AppName" `
-            --hidden-import win32com `
-            --hidden-import win32com.client `
-            --hidden-import pythoncom `
-            --hidden-import pywintypes `
-            --collect-submodules win32com `
-            --collect-data win32com `
-            $Script
-
-          # 如果想把示例 CSV 打包到 exe 运行目录旁（不是打进 exe 内），可改为使用 Release 附件；若一定要随 exe 走，可用 --add-data：
-          # pyinstaller ... --add-data "mail_config.csv;." ...
-
-      - name: List dist
-        run: dir dist
-
+          $Script = "send_hospital_reports_v8.py"
+          $AppName = "SendHospitalReports-${{ matrix.mode }}"
+          $Common = "--windowed --name `"$AppName`" --hidden-import win32com --hidden-import win32com.client --hidden-import pythoncom --hidden-import pywintypes --collect-submodules win32com --collect-data win32com"
+          if ("${{ matrix.mode }}" -eq "onedir") {
+            pyinstaller --noconfirm --onedir  $Common $Script
+          } else {
+            pyinstaller --noconfirm --onefile $Common --noupx $Script
+          }
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SendHospitalReports-EXE
-          path: dist/*.exe
-          if-no-files-found: error
+          name: SendHospitalReports-${{ matrix.mode }}
+          path: |
+            dist/SendHospitalReports-${{ matrix.mode }}.exe
+            dist/SendHospitalReports-${{ matrix.mode }}/
+          if-no-files-found: warn
