@@ -1,65 +1,88 @@
-name: Build Windows EXE (PyInstaller)
+name: Build Windows EXE
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   push:
-    branches: [ "main" ]
+    paths:
+      - "send_hospital_reports_v9.py"
+      - ".github/workflows/build-exe.yml"
+      - "requirements.txt"
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          architecture: "x64"
-          cache: "pip"
 
       - name: Install dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
-          if (Test-Path requirements.txt) {
-            pip install -r requirements.txt
-          } else {
-            pip install pyinstaller pywin32
-          }
+          # 你的脚本若还有其它依赖可写进 requirements.txt（可选）
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pyinstaller pywin32
 
-      # 可选：如果你想把一个示例 mail_config.csv 一并打进 exe 同目录，先准备一个文件
-      # - name: Prepare sample config (optional)
-      #   run: |
-      #     echo "Hospital,To,Cc,Bcc,SubjectTemplate,BodyTemplate" > mail_config.csv
-      #     echo "示例医院A,example@hospital.com,,,【{hospital}】报告（{date_range_cn}）,[indent]尊敬的{hospital}同事：" >> mail_config.csv
+      - name: Verify pywin32
+        shell: bash
+        run: |
+          python - << 'PY'
+          import pythoncom, win32com.client, pywintypes
+          print("pywin32 OK")
+          PY
 
       - name: Build EXE with PyInstaller
-        shell: pwsh
+        shell: bash
         run: |
-          $Script = "send_hospital_reports_v8.py"   # 改成你的脚本名
-          $AppName = "SendHospitalReports"          # 输出 exe 名称
-          # 如需图标，先把 app.ico 放到仓库，然后加上 --icon app.ico
-          pyinstaller --noconfirm --onefile --windowed `
-            --name "$AppName" `
-            --hidden-import win32com `
-            --hidden-import win32com.client `
-            --hidden-import pythoncom `
-            --hidden-import pywintypes `
-            --collect-submodules win32com `
-            --collect-data win32com `
-            $Script
+          pyinstaller --noconfirm --onefile --windowed \
+            --name SendHospitalReports \
+            --hidden-import=win32com --hidden-import=win32com.client \
+            --hidden-import=pythoncom --hidden-import=pywintypes \
+            --collect-submodules win32com --collect-data win32com \
+            send_hospital_reports_v9.py
 
-          # 如果想把示例 CSV 打包到 exe 运行目录旁（不是打进 exe 内），可改为使用 Release 附件；若一定要随 exe 走，可用 --add-data：
-          # pyinstaller ... --add-data "mail_config.csv;." ...
-
-      - name: List dist
-        run: dir dist
+      - name: Copy extras (optional)
+        shell: bash
+        run: |
+          mkdir -p dist
+          # 若仓库里有示例配置/说明就一起打包到发布产物里（可选）
+          [ -f README.txt ] && cp README.txt dist/README.txt || true
+          [ -f mail_config.csv ] && cp mail_config.csv dist/mail_config.csv || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SendHospitalReports-EXE
-          path: dist/*.exe
-          if-no-files-found: error
+          name: SendHospitalReports_windows
+          path: |
+            dist/SendHospitalReports.exe
+            dist/README.txt
+            dist/mail_config.csv
+
+  release:
+    # 只有打 tag（例如 refs/tags/v1.0.0）时才会跑
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: SendHospitalReports_windows
+          path: release_dist
+
+      - name: Zip
+        run: |
+          powershell -Command "Compress-Archive -Path release_dist\* -DestinationPath SendHospitalReports_win.zip"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SendHospitalReports_win.zip
