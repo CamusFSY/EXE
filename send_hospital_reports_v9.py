@@ -281,7 +281,7 @@ class ScrollableFrame(ttk.Frame):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Outlook 批量发送（医院模板 v9 — 已发送存档/失败重试/字体预设）")
+        self.title("Outlook 批量发送")
         self.geometry("1000x780")
         self.minsize(900, 720)
         self.resizable(True, True)
