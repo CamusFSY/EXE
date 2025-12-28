@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "send_hospital_reports_v10.py"
+      - "send_hospital_reports_v9.py"
       - ".github/workflows/build-exe.yml"
       - "requirements.txt"
 
@@ -45,7 +45,7 @@ jobs:
             --hidden-import=win32com --hidden-import=win32com.client \
             --hidden-import=pythoncom --hidden-import=pywintypes \
             --collect-submodules win32com --collect-data win32com \
-            send_hospital_reports_v10.py
+            send_hospital_reports_v9.py
 
       - name: Copy extras (optional)
         shell: bash
