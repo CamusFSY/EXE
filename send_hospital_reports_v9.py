@@ -1,11 +1,12 @@
 
 # -*- coding: utf-8 -*-
 """
-Outlook 批量邮件（医院模板版）— v9
+Outlook 批量邮件（医院模板版）— v10
 新增/改进：
 1) 保存“.msg”为【已发送副本】（Sent Items 中的那一封），针对大附件：支持“保存失败自动重试（含复制后再保存）”、可调最大等待秒数。
 2) 发送失败可重试：记录失败序号（CSV 第一列“序号/Seq/ID/Index/No/#”等），提供“仅重发失败项”按钮；状态区显示失败清单。
 3) 默认正文字体为“微软雅黑”（Microsoft YaHei），并在界面提供常用字体“代号”下拉，一键填充 CSS font-family。
+4) 新增：可在文本框输入“接收失败的收件人邮箱”，自动匹配配置文件所在行，并按行合并重发（保留该行 CC/BCC），发送后保存已发送 .msg。
    仍支持自定义 CSS（可编辑输入框）。
 其余：保留 v7/v8 的紧凑布局、DPI 适配、浏览文件夹、段落格式标记等。
 """
@@ -48,7 +49,9 @@ OL_FOLDER_SENT = 5  # olFolderSentMail
 
 
 def cn_date(d: datetime) -> str:
-    return f"{d.year}年{d.month}年{d.day}日".replace("年", "年", 1)  # 确保格式
+    """中文日期：2025年12月20日"""
+    return f"{d.year}年{d.month}月{d.day}日"
+
 
 
 def ensure_sample_config(path: Path):
@@ -106,6 +109,27 @@ def find_files(folder: Path):
 def safe_name(s: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "_", (s or "")).strip()[:150] or "email"
 
+
+
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+def extract_emails(s: str) -> List[str]:
+    """从字符串中提取邮箱（统一为小写），支持 'Name <a@b.com>'、分号/逗号/换行等。"""
+    if not s:
+        return []
+    s = str(s)
+    # 常见中文分隔符归一化
+    s = s.replace("；", ";").replace("，", ",").replace("、", ";")
+    found = EMAIL_RE.findall(s)
+    # 去重但保持顺序
+    out = []
+    seen = set()
+    for e in found:
+        e2 = e.strip().lower()
+        if e2 and e2 not in seen:
+            seen.add(e2)
+            out.append(e2)
+    return out
 
 def render_html(template: str, mapping: dict, font_family: str, font_pt: int) -> str:
     filled = template.format(**mapping)
@@ -288,7 +312,7 @@ class App(tk.Tk):
 
         # 样式/缩放/密度
         self.base_font_family = "Microsoft YaHei UI"
-        self.base_font_size = 12
+        self.base_font_size = 10
         self.scale_var = tk.DoubleVar(value=1.05)
         self.density_var = tk.StringVar(value="紧凑")
 
@@ -340,7 +364,7 @@ class App(tk.Tk):
             "Times New Roman": "'Times New Roman', Times, serif",
         }
         self.font_family = tk.StringVar(value=self.font_presets["微软雅黑 (推荐)"])
-        self.font_pt = tk.StringVar(value="12")
+        self.font_pt = tk.StringVar(value="10")
 
         # 已发送 .msg 存档控制（大附件容错）
         self.save_msg = tk.BooleanVar(value=True)
@@ -393,6 +417,10 @@ class App(tk.Tk):
         if hasattr(self, "failed_list"):
             try: self.failed_list.configure(font=self.font_list)
             except Exception: pass
+        if hasattr(self, "resend_text"):
+            try: self.resend_text.configure(font=self.font_list)
+            except Exception: pass
+
 
     def on_scale_change(self, _):
         self.apply_style(); self.apply_runtime_widget_fonts()
@@ -503,6 +531,20 @@ class App(tk.Tk):
         self.failed_list = tk.Listbox(fail_box, height=6, width=110)
         self.failed_list.pack(fill="x", expand=True)
 
+        # 指定收件人重发（按配置行自动归类）
+        resend_box = ttk.Frame(self.sec4)
+        resend_box.grid(row=2, column=0, columnspan=3, sticky="w", **pad)
+        ttk.Label(
+            resend_box,
+            text="指定收件人重发（输入接收失败的邮箱，自动匹配配置行；支持 ; , 空格/换行分隔）："
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        self.resend_text = tk.Text(resend_box, height=3, width=90)
+        self.resend_text.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        resend_btns = ttk.Frame(resend_box)
+        resend_btns.grid(row=1, column=1, sticky="n", padx=(8, 0), pady=(4, 0))
+        ttk.Button(resend_btns, text="按收件人重发", command=self.run_resend_by_recipients, width=16).pack(fill="x")
+        ttk.Button(resend_btns, text="清空", command=lambda: self.resend_text.delete("1.0", tk.END), width=16).pack(fill="x", pady=(6, 0))
+
         # 状态栏
         self.status = tk.StringVar(value="准备就绪。")
         status_bar = ttk.Frame(self.root); status_bar.grid(row=4, column=0, sticky="w", padx=10, pady=(0,6))
@@ -601,6 +643,145 @@ class App(tk.Tk):
             return
         self._run(batch="failed")
 
+
+
+    def run_resend_by_recipients(self):
+        """输入若干‘接收失败’邮箱，自动匹配配置文件行，并按行合并重发（保留该行 CC/BCC），且保存已发送 .msg。"""
+        try:
+            raw = self.resend_text.get("1.0", tk.END).strip()
+        except Exception:
+            raw = ""
+        emails = extract_emails(raw)
+        if not emails:
+            messagebox.showinfo("提示", "请在“指定收件人重发”框中输入至少一个邮箱。")
+            return
+
+        # 仅在发送模式下支持“保存已发送 .msg”
+        if self.mode.get() != "send":
+            messagebox.showinfo("提示", "该功能建议在“直接发送（并存档 .msg）”模式下使用。请切换到‘直接发送’后再执行。")
+            return
+        if not bool(self.save_msg.get()) or not (self.msg_dir.get().strip()):
+            messagebox.showinfo("提示", "该功能需要保存 .msg：请勾选“保存 .msg”并设置保存目录后再执行。")
+            return
+
+        self._run_resend_by_emails(emails)
+
+    def _run_resend_by_emails(self, emails: List[str]):
+        # 扫描公用输入（日期/配置/附件/字体/存档参数）
+        try:
+            s, e, items, attachments, font_family, font_pt, save_msg, msg_dir, poll_seconds, save_retries = self._collect_common()
+        except Exception as ex:
+            messagebox.showerror("输入有误", str(ex))
+            return
+
+        if win32 is None:
+            messagebox.showerror("缺少依赖", "未检测到 pywin32。请先安装 pywin32。")
+            return
+
+        # 构造公共占位符
+        mapping_common = {
+            "start_date": s.strftime("%Y-%m-%d"),
+            "end_date": e.strftime("%Y-%m-%d"),
+            "start_date_cn": cn_date(s),
+            "end_date_cn": cn_date(e),
+            "date_range_cn": f"{cn_date(s)}至{cn_date(e)}",
+        }
+
+        # email -> Seq(s) 映射（只按 To 匹配）
+        email_to_seqs: Dict[str, List[str]] = {}
+        seq_to_item: Dict[str, Dict[str, str]] = {}
+        for it in items:
+            seq = str(it.get("Seq", "")).strip()
+            if not seq:
+                continue
+            seq_to_item[seq] = it
+            for em in extract_emails(it.get("To", "")):
+                email_to_seqs.setdefault(em, []).append(seq)
+
+        # 输入邮箱按“配置行”归类；同一行合并一起发
+        groups: Dict[str, Set[str]] = {}
+        group_order: List[str] = []
+        unmatched: List[str] = []
+        ambiguous: List[str] = []
+        for em in emails:
+            seqs = email_to_seqs.get(em, [])
+            if not seqs:
+                unmatched.append(em)
+                continue
+            if len(seqs) > 1:
+                ambiguous.append(f"{em} -> {', '.join(seqs)}（已默认取第一行）")
+            seq = seqs[0]
+            if seq not in groups:
+                groups[seq] = set()
+                group_order.append(seq)
+            groups[seq].add(em)
+
+        if not groups:
+            messagebox.showinfo("完成", "未找到可重发的配置行（输入邮箱均未匹配到配置文件的 To 列）。")
+            return
+
+        outlook = win32.Dispatch("Outlook.Application")
+
+        # 结果统计
+        total = len(group_order)
+        ok = 0
+        archived = 0
+        failed_count = 0
+
+        self.failed_list.insert(tk.END, "---- 指定收件人重发 ----")
+
+        for i, seq in enumerate(group_order, start=1):
+            it = seq_to_item.get(seq)
+            if not it:
+                continue
+            hospital = it.get("Hospital", "")
+            cc = it.get("Cc", "")
+            bcc = it.get("Bcc", "")
+            subject_t = it.get("SubjectTemplate", "")
+            body_t = it.get("BodyTemplate", "")
+
+            to_list = sorted(groups.get(seq, set()))
+            to_addr = "; ".join(to_list)
+
+            m = dict(mapping_common)
+            m["hospital"] = hospital
+
+            try:
+                subject = subject_t.format(**m)
+                html = render_html(body_t, m, font_family, font_pt)
+
+                res, saved = send_mail_and_archive(
+                    outlook, to_addr, cc, bcc, subject, html, attachments,
+                    save_msg=True, msg_dir=msg_dir,
+                    poll_seconds=poll_seconds,
+                    poll_interval=1.2,
+                    save_retries=(save_retries if self.retry_save.get() else 1),
+                    save_wait_each=3.0
+                )
+                if res == "Sent":
+                    ok += 1
+                    if saved:
+                        archived += 1
+                else:
+                    raise RuntimeError(f"未知状态：{res}")
+            except Exception as ex:
+                failed_count += 1
+                self.failed_list.insert(tk.END, f"{seq} - {hospital} - To: {to_addr} - {ex}")
+
+            self.status.set(f"重发进度：{i}/{total}")
+
+        # 汇总提示
+        lines = [f"按收件人重发完成：共 {total} 组（按配置行合并），成功：{ok}；成功存档 .msg：{archived}；失败：{failed_count}。"]
+        if unmatched:
+            lines.append("")
+            lines.append("未匹配到配置行（配置文件 To 列未包含这些邮箱）：")
+            lines.append("；".join(unmatched))
+        if ambiguous:
+            lines.append("")
+            lines.append("配置文件中重复出现的邮箱（已默认取第一行）：")
+            lines.extend(ambiguous)
+
+        messagebox.showinfo("完成", "\n".join(lines))
     def _collect_common(self):
         # 日期
         try:
